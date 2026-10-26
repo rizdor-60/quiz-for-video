@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>ファイブアンサーズ｜手書きリアルタイム回答</title>
+<style>
+:root{--bg1:#1d3f9a;--bg2:#060b28;--gold:#ffd24a;--paper:#f7f3e6;--ink:#111;--ok:#3ddc84;--ng:#ff5a5f;--panel:#0d1a4acc;box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:radial-gradient(ellipse at 50% 0,var(--bg1),var(--bg2) 75%) fixed;color:#fff;font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;-webkit-user-select:none;user-select:none;overflow-x:hidden}
+button{font:inherit;color:#fff;border:2px solid var(--gold);background:#12246b;border-radius:12px;padding:14px 18px;font-weight:700;touch-action:manipulation}
+button.pri{background:linear-gradient(#ffd24a,#e59a00);color:#2a1a00;border-color:#fff}
+button.sm{padding:6px 10px;font-size:13px;border-radius:8px}
+button:disabled{opacity:.35}
+input{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid #6b7fc9;background:#0a1440;color:#fff;width:100%}
+.wrap{max-width:900px;margin:0 auto;padding:12px}
+.board{position:relative;aspect-ratio:1;width:100%;background:var(--paper);border:6px solid var(--gold);border-radius:14px;box-shadow:0 0 0 3px #0008,0 8px 30px #000a;overflow:hidden;
+background-image:linear-gradient(#0002,#0002),linear-gradient(90deg,#0002,#0002),linear-gradient(90deg,transparent calc(50% - 1px),#c33a 50%,transparent calc(50% + 1px)),linear-gradient(transparent calc(50% - 1px),#c33a 50%,transparent calc(50% + 1px));background-size:100% 1px,1px 100%,100% 100%,100% 100%;background-repeat:no-repeat}
+.board canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.cover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:repeating-linear-gradient(45deg,#14297a,#14297a 14px,#102268 14px,#102268 28px);color:var(--gold);font-weight:900;font-size:clamp(14px,3vw,34px);letter-spacing:.1em;text-align:center}
+.cover small{color:#fff;font-weight:400;letter-spacing:0}
+.top{display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px;gap:8px}
+.q{background:linear-gradient(#ffd24a,#e59a00);color:#2a1a00;font-weight:900;padding:4px 16px;border-radius:999px;font-size:20px}
+.badge{padding:3px 10px;border-radius:999px;font-size:13px;font-weight:700;background:#334}
+.b-writing{background:#2f7bff}.b-locked{background:var(--ok);color:#022}.b-idle{background:#445}
+.tools{display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:10px;margin-top:12px}
+.tools button{padding:20px 8px;font-size:20px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:12px}
+.card{background:var(--panel);border:2px solid #5a73d6;border-radius:14px;padding:8px}
+.card .nm{display:flex;justify-content:space-between;align-items:center;font-weight:800;font-size:clamp(14px,1.8vw,26px);margin-bottom:6px;gap:6px}
+.card .board{border-width:4px}
+.adm .grid{padding:0}
+.ctl{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.grid.foc{grid-template-columns:1fr}.grid.foc .card:not(.f){display:none}.grid.foc .card.f{max-width:min(92vh,92vw);margin:0 auto}
+.verdict{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-size:55vmin;font-weight:900;pointer-events:none;text-shadow:0 0 40px #000}
+.verdict.ok{display:flex;color:var(--ok)}.verdict.ng{display:flex;color:var(--ng)}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.panel{background:var(--panel);border:1px solid #5a73d6;border-radius:12px;padding:12px;margin-bottom:12px}
+a{color:var(--gold)}
+.sh{text-align:center;font-size:clamp(18px,3vw,40px);font-weight:900;color:var(--gold);letter-spacing:.15em;padding-top:10px}
+.msg{text-align:center;padding:40px;line-height:1.8}
+@media(max-width:700px){.grid{grid-template-columns:1fr 1fr}}
+</style></head><body>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<div id="app"></div><div id="vd" class="verdict"></div>
+<script>
+const IDS=['p1','p2','p3','p4','p5','p6'],$=s=>document.querySelector(s),app=$('#app');
+addEventListener('hashchange',()=>location.reload());
+const BASE=location.href.split('#')[0],ROLE=(location.hash||'').slice(1);
+const DEF={q:1,revealed:false,focus:'',verdict:'',title:'ファイブアンサーズ'};
+let db,G={...DEF},P={},cards={};
+const pdef=(i)=>({name:'Player '+i.slice(1),strokes:'[]',status:'idle'});
+const gdoc=()=>db.doc('nepu/state'),pdoc=i=>db.doc('nepuPlayers/'+i);
+const E=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e};
+const safe=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---- drawing ---- */
+function render(cv,strokes){
+  const w=cv.clientWidth||300,d=window.devicePixelRatio||1;
+  if(cv.width!==Math.round(w*d)){cv.width=cv.height=Math.round(w*d)}
+  const x=cv.getContext('2d');x.setTransform(cv.width/1000,0,0,cv.width/1000,0,0);x.clearRect(0,0,1000,1000);
+  x.lineCap=x.lineJoin='round';x.strokeStyle=x.fillStyle='#111';x.lineWidth=17;
+  for(const s of strokes){
+    if(s.length==1){x.beginPath();x.arc(s[0][0],s[0][1],8.5,0,7);x.fill();continue}
+    x.beginPath();x.moveTo(s[0][0],s[0][1]);
+    for(let i=1;i<s.length-1;i++){const m=[(s[i][0]+s[i+1][0])/2,(s[i][1]+s[i+1][1])/2];x.quadraticCurveTo(s[i][0],s[i][1],m[0],m[1])}
+    const l=s[s.length-1];x.lineTo(l[0],l[1]);x.stroke();
+  }
+}
+function boardEl(){const b=E('div','board'),c=E('canvas');b.append(c);return[b,c]}
+const parse=s=>{try{return JSON.parse(s)||[]}catch(e){return[]}};
+const stText={idle:'待機中',writing:'回答中',locked:'確定済'};
+
+/* ===== ここをFirebaseの設定に書き換え ===== */
+const FIREBASE_CONFIG={apiKey:"AIzaSyCmdyNCAdIyALEBNIpL6FsIt7E8_e9nELA",authDomain:"rizd-or-quiz.firebaseapp.com",projectId:"rizd-or-quiz",storageBucket:"rizd-or-quiz.firebasestorage.app",messagingSenderId:"649394191096",appId:"1:649394191096:web:2f28b3669e87d4778d990d"};
+const ADMIN_PASS="admin1234"; // 管理者画面の簡易パスワード（変更してください）
+/* ======================================== */
+function makeDb(){
+  const fs=firebase.firestore(firebase.initializeApp(FIREBASE_CONFIG));
+  const W=s=>({id:s.id,exists:s.exists,data:()=>s.data()});
+  return{doc:p=>{const r=fs.doc(p);return{get:async()=>W(await r.get()),set:d=>r.set(d),update:d=>r.update(d),onSnapshot:(n,e)=>r.onSnapshot(x=>n(W(x)),e)}},
+    collection:p=>{const c=fs.collection(p);return{onSnapshot:(n,e)=>c.onSnapshot(x=>n({docs:x.docs.map(W)}),e)}}};
+}
+/* ---- init ---- */
+(async()=>{
+  if(FIREBASE_CONFIG.apiKey==='YOUR_API_KEY'){app.innerHTML='<div class="msg">index.html 内の FIREBASE_CONFIG をFirebaseの設定に書き換えてください。</div>';return}
+  db=makeDb();
+  try{
+    const g=await gdoc().get();if(!g.exists)await gdoc().set(DEF);
+    for(const i of IDS){const s=await pdoc(i).get();if(!s.exists)await pdoc(i).set(pdef(i))}
+  }catch(e){}
+  gdoc().onSnapshot(s=>{if(s.exists){G={...DEF,...s.data()};onG&&onG()}});
+  db.collection('nepuPlayers').onSnapshot(s=>{s.docs.forEach(d=>P[d.id]=d.data());onP&&onP()});
+  if(ROLE==='admin'){if(prompt('管理者パスワード')===ADMIN_PASS)admin();else lobby()}else if(ROLE==='screen')screen();else if(IDS.includes(ROLE))player(ROLE);else lobby();
+})();
+let onG,onP;
+
+function lobby(){
+  app.innerHTML='<div class="wrap"><h1 style="color:var(--gold)">ファイブアンサーズ</h1><div class="panel">URLの末尾（#の後）で画面が切り替わります。参加者へは下のURLを共有してください。</div></div>';
+  const w=$('.wrap');const L=(n,h)=>{const p=E('div','panel',`<b>${n}</b><br><a href="${BASE}#${h}">${BASE}#${h}</a>`);w.append(p)};
+  L('管理者画面（PC）','admin');L('投影専用画面','screen');IDS.forEach(i=>L('参加者 '+i.slice(1),i));
+}
+
+/* ---- player ---- */
+function player(id){
+  app.innerHTML='';const w=E('div','wrap');app.append(w);
+  w.style.maxWidth='min(96vw,92vh - 150px,820px)';
+  const top=E('div','top'),nm=E('b'),q=E('span','q'),bd=E('span','badge');top.append(nm,q,bd);
+  const[b,cv]=boardEl(),ov=E('div','cover');ov.style.display='none';b.append(ov);
+  const t=E('div','tools'),bc=E('button','',  '全消し'),bu=E('button','','一画戻す'),bo=E('button','pri','これで確定');t.append(bc,bu,bo);
+  w.append(top,b,t);
+  let S=[],cur=null,locked=false,last=0,timer=null,loaded=false;
+  const flush=(st)=>{clearTimeout(timer);timer=null;last=Date.now();
+    pdoc(id).update({strokes:JSON.stringify(S),status:st||(locked?'locked':S.length?'writing':'idle'),q:G.q}).catch(()=>{})};
+  const sched=()=>{if(!timer)timer=setTimeout(()=>flush(),110)};
+  const pt=e=>{const r=cv.getBoundingClientRect();return[Math.round((e.clientX-r.left)/r.width*1000),Math.round((e.clientY-r.top)/r.height*1000)]};
+  cv.addEventListener('pointerdown',e=>{if(locked)return;e.preventDefault();cv.setPointerCapture(e.pointerId);cur=[pt(e)];S.push(cur);render(cv,S);sched()});
+  cv.addEventListener('pointermove',e=>{if(!cur)return;e.preventDefault();
+    const ev=e.getCoalescedEvents?e.getCoalescedEvents():[e];for(const c of(ev.length?ev:[e]))cur.push(pt(c));render(cv,S);sched()});
+  const end=()=>{if(cur){cur=null;flush()}};
+  cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
+  cv.addEventListener('contextmenu',e=>e.preventDefault());
+  bc.onclick=()=>{if(locked||!S.length)return;S=[];render(cv,S);flush()};
+  bu.onclick=()=>{if(locked)return;S.pop();render(cv,S);flush()};
+  bo.onclick=()=>{if(locked)return;if(!S.length&&!confirm('白紙のまま確定しますか？'))return;locked=true;flush('locked');ui()};
+  function ui(){
+    nm.textContent=(P[id]&&P[id].name)||id;q.textContent='第 '+G.q+' 問';
+    const st=locked?'locked':S.length?'writing':'idle';bd.className='badge b-'+st;bd.textContent=stText[st];
+    [bc,bu,bo].forEach(x=>x.disabled=locked);
+    ov.style.display=locked?'flex':'none';cv.style.visibility=locked?'hidden':'visible';
+    ov.innerHTML=G.revealed?'ANSWER OPEN<small>大型スクリーンを見てね</small>':'確定！<small>全員の回答が公開されるまでお待ちください</small>';
+    ov.style.background=G.revealed?'#0d6b3a':'';
+  }
+  onG=ui;
+  onP=()=>{const d=P[id];if(!d)return;
+    if(!loaded){loaded=true;S=parse(d.strokes);locked=d.status==='locked'}
+    else if(d.status==='idle'&&d.strokes==='[]'&&Date.now()-last>1500&&!cur){S=[];locked=false}
+    else if(d.status==='locked')locked=true;
+    render(cv,S);ui()};
+  new ResizeObserver(()=>render(cv,S)).observe(cv);
+  document.addEventListener('gesturestart',e=>e.preventDefault());
+  onP();
+}
+
+/* ---- shared cards (admin / screen) ---- */
+function mkCards(parent,isAdmin){
+  const g=E('div','grid');parent.append(g);
+  IDS.forEach(id=>{
+    const c=E('div','card'),nm=E('div','nm'),n=E('span'),bd=E('span','badge');nm.append(n,bd);
+    const[b,cv]=boardEl(),cov=E('div','cover');b.append(cov);c.append(nm,b);
+    if(isAdmin){
+      const ctl=E('div','ctl'),r=E('button','sm','リセット'),f=E('button','sm','拡大'),ni=E('input');ni.placeholder='名前';ni.style.width='90px';
+      r.onclick=()=>pdoc(id).update({strokes:'[]',status:'idle'});
+      f.onclick=()=>gdoc().update({focus:G.focus===id?'':id});
+      ni.onchange=()=>pdoc(id).update({name:ni.value||('Player '+id.slice(1))});
+      ctl.append(ni,r,f);c.append(ctl);c._ni=ni;
+    }
+    g.append(c);cards[id]={c,n,bd,cv,cov};new ResizeObserver(()=>upd(id,isAdmin)).observe(cv);
+  });
+  return g;
+}
+function upd(id,isAdmin){
+  const k=cards[id],d=P[id]||pdef(id);if(!k)return;
+  k.n.textContent=d.name;k.bd.className='badge b-'+d.status;k.bd.textContent=stText[d.status]||'';
+  const show=isAdmin||G.revealed;
+  k.cov.style.display=show?'none':'flex';
+  if(!show)k.cov.innerHTML=d.status==='locked'?'確定！<small>OK</small>':d.status==='writing'?'回答中…':'待機中';
+  render(k.cv,show?parse(d.strokes):[]);
+  if(k.c._ni&&document.activeElement!==k.c._ni)k.c._ni.value=d.name;
+}
+const updAll=a=>IDS.forEach(i=>upd(i,a));
+function verdict(){const v=$('#vd');v.className='verdict '+(G.revealed&&G.verdict?G.verdict:'');v.textContent=G.verdict==='ok'?'○':G.verdict==='ng'?'×':''}
+
+/* ---- screen ---- */
+function screen(){
+  app.innerHTML='';const h=E('div','sh');app.append(h);const g=mkCards(app,false);
+  onG=()=>{h.textContent=`${G.title}　第 ${G.q} 問`;g.className='grid'+(G.focus?' foc':'');
+    IDS.forEach(i=>cards[i].c.classList.toggle('f',G.focus===i));updAll(false);verdict()};
+  onP=()=>updAll(false);onG();
+  document.addEventListener('dblclick',()=>{if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen()});
+}
+
+/* ---- admin ---- */
+function admin(){
+  app.innerHTML='';const w=E('div','wrap adm');w.style.maxWidth='1200px';app.append(w);
+  const bar=E('div','panel bar'),qs=E('span','q');
+  const B=(t,f,c)=>{const b=E('button',c||'',t);b.onclick=f;bar.append(b);return b};
+  const resetAll=(extra)=>Promise.all(IDS.map(i=>pdoc(i).update({strokes:'[]',status:'idle'}))).then(()=>gdoc().update({revealed:false,focus:'',verdict:'',...extra}));
+  bar.append(qs);
+  const rv=B('全員の回答を公開',()=>gdoc().update({revealed:!G.revealed}),'pri');
+  B('○ 一致',()=>gdoc().update({verdict:G.verdict==='ok'?'':'ok'}));B('× 不一致',()=>gdoc().update({verdict:G.verdict==='ng'?'':'ng'}));
+  B('全員リセット',()=>confirm('全員の回答を消去しますか？')&&resetAll({}));
+  B('次の問題へ',()=>confirm('次の問題へ進み、全員をリセットします')&&resetAll({q:G.q+1}),'pri');
+  B('前の問題',()=>G.q>1&&resetAll({q:G.q-1}));
+  const st=E('span','badge');bar.append(st);
+  const ti=E('input');ti.style.width='180px';ti.placeholder='番組タイトル';ti.onchange=()=>gdoc().update({title:ti.value});bar.append(ti);
+  w.append(bar);
+  const g=mkCards(w,true);
+  const lk=E('div','panel');lk.innerHTML='<b>参加用リンク</b>（各端末で開く）<br>'+[['投影専用画面','screen'],...IDS.map(i=>['参加者'+i.slice(1),i])].map(([n,h])=>`${n}: <a href="${BASE}#${h}" target="_blank">${BASE}#${h}</a>`).join('<br>')+'<br><small>投影画面はダブルクリックで全画面。公開前でも管理画面ではすべての筆跡が見えます。</small>';
+  w.append(lk);
+  const u=()=>{
+    qs.textContent='第 '+G.q+' 問';rv.textContent=G.revealed?'非公開に戻す':'全員の回答を公開';
+    const n=IDS.filter(i=>(P[i]||{}).status==='locked').length;st.textContent=`確定 ${n}/6`;st.className='badge '+(n==6?'b-locked':'b-writing');
+    if(document.activeElement!==ti)ti.value=G.title;
+    g.className='grid';IDS.forEach(i=>cards[i].c.style.outline=G.focus===i?'3px solid var(--gold)':'');updAll(true);
+  };
+  onG=u;onP=u;u();
+}
+</script></body></html>
